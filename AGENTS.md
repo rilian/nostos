@@ -94,11 +94,17 @@ Break one of these and results become silently wrong or stop matching the server
   Progress is reported after every kernel slice.
 * A resume must reproduce the rows of the remaining stars byte for byte; per-star seeds make a recomputed star give
   the same row on the same platform.
-* Known defects at eb7029e: rows written after the last checkpoint are kept and written again, and the CPU app can
-  count rows that never reached the disk (NOS-001); in-place unchecked write (NOS-002); GPU cadence outside the timer
-  (NOS-003); an unopenable checkpoint restarts from 0 (NOS-010); no write-error check before `boinc_finish(0)`
-  (NOS-011); CRLF in `out` on Windows (NOS-014). A restart after the `# done` trailer was written but before
-  `boinc_finish()` completed appends a second trailer (NOS-001).
+* Known defects at eb7029e:
+  * Rows written after the last checkpoint are kept and written again, and the CPU app can count rows that never
+    reached the disk (NOS-001).
+  * A restart after the `# done` trailer was written but before `boinc_finish()` completed appends a second trailer
+    (NOS-001).
+  * The checkpoint is rewritten in place, its write is not checked, and completion is reported even when it failed
+    (NOS-002).
+  * The GPU app writes the checkpoint after every batch, without `boinc_time_to_checkpoint()` (NOS-003).
+  * A checkpoint that cannot be opened restarts the task from star 0 and truncates `out` (NOS-010).
+  * Write errors on `out` are not checked before `boinc_finish(0)` (NOS-011).
+  * Windows builds write `out` with CRLF line ends (NOS-014).
 
 ## Building
 
@@ -142,7 +148,9 @@ device; `--cl-platform` (default 0) is tried first and kept only if it has GPUs 
 
 Data (developer machine): `python scripts/list_gaia_bulk.py`, `python scripts/download_filter_6d.py` (fixed
 `D:/nostos_data`, NOS-009), then `python scripts/make_star_catalog.py <gaia_csv> <out.txt.gz>` or
-`python scripts/make_work_units.py <gaia_csv> <out_dir> [--chunk-size N] [--zpt lindegren|global|none]`.
+`python scripts/make_work_units.py <gaia_csv> <out_dir> [--chunk-size N] [--zpt lindegren|global|none]`. The download
+marks a bulk file done after five failed attempts, so its rows are lost for good (NOS-006), and writes a file's rows
+twice when it stops between writing them and marking the file done (NOS-008).
 
 ## Tests
 
@@ -177,6 +185,8 @@ What to run for which change:
   with WSL and MSVC; the scripts cannot run elsewhere without edits (NOS-015).
 * The kernel needs fp64: no Metal, Intel or Adreno builds; OpenCL plan classes `opencl_ati_fp64` and
   `opencl_nvidia_fp64` (dea832d); the app refuses a device without fp64 (`src/nostos_opencl.c:52-55`).
+* GPU errors: initialisation and kernel failures end the task with `boinc_finish(1)`, a computation error
+  (NOS-004, not confirmed yet), and the OpenCL launch loop ignores the results of `clSetKernelArg` (NOS-022).
 * Linux CUDA uses CUDA 12.8.1 (sm_50 and newer), Windows CUDA uses CUDA 13.3 (sm_75 and newer).
 * Linux OpenCL needs `-D_POSIX_C_SOURCE=200809L` for `clock_gettime` (291f413).
 * Build inputs are not pinned: container images by tag, unversioned `apt-get` packages, BOINC from the build server
@@ -212,12 +222,15 @@ What to run for which change:
 applications. Workflow: [docs/kb/shared/PROCESS.md](docs/kb/shared/PROCESS.md).
 
 - Ready to fix, with next steps: `python3 docs/kb/shared/kb.py list --open --action fix` (also `--area`,
-  `--platform`); then the issue's file and the pattern it links.
+  `--platform`). Then `kb.py show NOS-NNN` for the issue and `kb.py show PAT-NNN` for the pattern it links, with the
+  BOINC API facts the pattern cites. In the code, read the functions that `where:` and the Cause name.
 - All repositories checked out next to this one: `kb.py todo`, then `kb.py todo --pattern PAT-NNN` for the next step
   and place of each issue; `kb.py check PAT-NNN` checks a pattern everywhere.
-- Before debugging a symptom: `grep -ril "<words>" ../*/docs/kb/issues docs/kb/shared/patterns`.
+- Before debugging a symptom: `grep -ril "<words>" ../*/docs/kb/issues docs/kb/shared/patterns`, then `kb.py show`
+  the ids it finds. Read other repositories through the shell (`kb.py show`, `git -C ../<repo> grep -n`, `sed -n`):
+  opening one of their files in an editor tool can load their whole AGENTS.md as well.
 - New report: `kb.py new issue "symptom in a few words" area=... next=...`.
 - After a fix: `kb.py set NOS-NNN status=fix-proposed --log "..."` (`status=fixed fixed_in=<commit>` once merged),
-  and update the lines of this file it prints. The commit names the issue (`KB: NOS-NNN`) and the pattern, if any
+  and update the passages of this file it prints. The commit names the issue (`KB: NOS-NNN`) and the pattern, if any
   (`Pattern: PAT-NNN`).
 - Before a pull request: `kb.py index && kb.py lint --strict`.
