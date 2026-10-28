@@ -74,11 +74,11 @@ Break one of these and results become silently wrong or stop matching the server
 * **Floating point.** C sources are compiled with `-std=c99` (GCC then does not fuse multiply-adds), CUDA with
   `--fmad=false`, the OpenCL kernel with `#pragma OPENCL FP_CONTRACT OFF`, 32-bit x86 with `-msse2 -mfpmath=sse`.
   GCC with `-std=c99` and Apple clang 14 emit no fused multiply-adds for this code (counted on 2026-10-27); the
-  Android and Windows ARM64 builds (upstream clang) gave different output, probably because they fuse (NOS-013).
+  Android and Windows ARM64 builds (upstream clang) gave different output, probably because they fuse (PAT-018).
 * **ISO elements.** The work unit must carry barycentric elements of the inbound leg (`src/iso_solutions.h`,
   `*_BARY_1600`); `scripts/make_work_units.py` must hold the same numbers (`tests/test_make_work_units.py`).
 * **Copies.** `src/coords.*`, `src/potential.*`, `src/montecarlo.*`, `src/integrator.h`, `src/vec3.h`, `src/units.h`
-  and `src/cl_dynload.*` are byte-identical to phygas's (`cl_dynload.c` differs from planodia's, NOS-016). They are
+  and `src/cl_dynload.*` are byte-identical to phygas's (planodia has its own `cl_dynload.c`; `kb.py status` shows drift). They are
   listed in `docs/kb/kb.conf`; change all copies together (NOS-020).
 
 ## Checkpoint and resume
@@ -94,11 +94,8 @@ Break one of these and results become silently wrong or stop matching the server
   Progress is reported after every kernel slice.
 * A resume must reproduce the rows of the remaining stars byte for byte; per-star seeds make a recomputed star give
   the same row on the same platform.
-* Known defects at eb7029e: rows written after the last checkpoint are kept and written again, and the CPU app can
-  count rows that never reached the disk (NOS-001); in-place unchecked write (NOS-002); GPU cadence outside the timer
-  (NOS-003); an unopenable checkpoint restarts from 0 (NOS-010); no write-error check before `boinc_finish(0)`
-  (NOS-011); CRLF in `out` on Windows (NOS-014). A restart after the `# done` trailer was written but before
-  `boinc_finish()` completed appends a second trailer (NOS-001).
+* Known defects of this contract are open issues: `python3 docs/kb/shared/kb.py list --open --area checkpoint,io`.
+  Read them before changing the resume code.
 
 ## Building
 
@@ -125,23 +122,21 @@ $CXX -static obj/*.o $B/api/libboinc_api.a $B/lib/libboinc.a -lpthread -lm     #
 Linux builds are static; the script prints the number of `GLIBC_` symbols (expected 0). Other CPU builds:
 `scripts/build_boinc_android.sh` (aarch64, WSL as root, NDK r27c, API 21, BOINC built with the NDK,
 `-static-libstdc++`), `scripts/build_boinc_linux.sh` (local x86_64 static build in WSL against BOINC 8.2.8,
-`BOINC_SRC`, `BOINC_BUILD`). Both have fixed developer paths (NOS-015). The macOS script named in
-`build_boinc_all.sh` is not in the repository (NOS-018).
+`BOINC_SRC`, `BOINC_BUILD`). Check the paths at the top of a script before running it (PAT-021).
 
 GPU apps: `bash scripts/build_gpu_server.sh` on the build server (sudo Docker; BOINC source in
 `/opt/bitboinc-src/boinc`, built inside each container): Linux CUDA in `nvidia/cuda:12.8.1-devel-ubuntu22.04`
 (`nvcc -O3 -std=c++17 --fmad=false`, sm_50 to sm_120, static cudart), Linux OpenCL in `ubuntu:22.04`, Windows OpenCL
 with the host's MinGW-w64; one OpenCL binary per vendor (`-DEXPECTED_GPU_VENDOR="amd"` tagged `ati`, `"nvidia"`).
-The Linux binaries need glibc 2.34 (NOS-005). Windows CUDA: `scripts\build_gpu_windows.bat` (MSVC 2022 Build Tools,
-CUDA 13.3, sm_75 and newer, NOS-021); `scripts\build_gpu_opencl_wintest.bat` is a local MSVC test build. After editing
+Windows CUDA: `scripts\build_gpu_windows.bat` (MSVC 2022 Build Tools,
+CUDA 13.3, sm_75 and newer); `scripts\build_gpu_opencl_wintest.bat` is a local MSVC test build. After editing
 `src/nostos_kernel_body.h`: `python scripts/embed_kernel.py`.
 
 `NOSTOS_VERSION` (default 1) only sets the file names. GPU run-time knobs: `NOSTOS_BATCH_STARS` (2000),
 `NOSTOS_STEPS_PER_LAUNCH` (upper bound of a slice, 5000). `--device` applies only when `init_data.xml` assigns no
 device; `--cl-platform` (default 0) is tried first and kept only if it has GPUs of the build's vendor.
 
-Data (developer machine): `python scripts/list_gaia_bulk.py`, `python scripts/download_filter_6d.py` (fixed
-`D:/nostos_data`, NOS-009), then `python scripts/make_star_catalog.py <gaia_csv> <out.txt.gz>` or
+Data (developer machine): `python scripts/list_gaia_bulk.py`, `python scripts/download_filter_6d.py`, then `python scripts/make_star_catalog.py <gaia_csv> <out.txt.gz>` or
 `python scripts/make_work_units.py <gaia_csv> <out_dir> [--chunk-size N] [--zpt lindegren|global|none]`.
 
 ## Tests
@@ -174,13 +169,11 @@ What to run for which change:
 
 * macOS: `make test` works with Apple clang; pass `PYTHON=python3` if `python` is missing.
 * Release builds need the bitboinc build server (cross compilers, per-target BOINC libraries, Docker) or a Windows PC
-  with WSL and MSVC; the scripts cannot run elsewhere without edits (NOS-015).
+  with WSL and MSVC.
 * The kernel needs fp64: no Metal, Intel or Adreno builds; OpenCL plan classes `opencl_ati_fp64` and
   `opencl_nvidia_fp64` (dea832d); the app refuses a device without fp64 (`src/nostos_opencl.c:52-55`).
 * Linux CUDA uses CUDA 12.8.1 (sm_50 and newer), Windows CUDA uses CUDA 13.3 (sm_75 and newer).
 * Linux OpenCL needs `-D_POSIX_C_SOURCE=200809L` for `clock_gettime` (291f413).
-* Build inputs are not pinned: container images by tag, unversioned `apt-get` packages, BOINC from the build server
-  without a printed version (NOS-023).
 * MSVC's C++ rejects compound literals, so `src/vec3.h` uses `v3_make()`; the C headers need `extern "C"` in the C++
   wrappers (the 2026-10-08 link failure).
 * The Gaia CSV is 43 GB. Python packages: `requests` (download), `numpy` and `gaiadr3-zeropoint` (default `--zpt
@@ -203,17 +196,24 @@ What to run for which change:
   `nostos_detail`, BOINC templates, plan classes, and the web pages (`nostos.php`, `nostos_3d.php`, admin and export
   pages).
 * The data: the Gaia CSV, `progress.txt`, scan results (under `D:/nostos_data` on the developer machine).
-* The BOINC libraries and the macOS build script (NOS-018).
+* The BOINC libraries.
 * The other copies of the shared files: phygas and planodia.
 
 ## Knowledge base
 
 `docs/kb/` holds this repository's known bugs, platform traps and their fixes, and the bug patterns shared with the
-other bitboinc applications. Start at [docs/kb/INDEX.md](docs/kb/INDEX.md): its first table, "Fix next", is the work
-that is ready, with the next step for each issue. Before debugging a symptom, search it (`grep -ril "<words>" docs/kb`).
-After a fix or a new finding, update the issue. Workflow: [docs/kb/shared/PROCESS.md](docs/kb/shared/PROCESS.md).
+other bitboinc applications. This file names only rules, gotchas and design notes; the open issues are in the
+knowledge base, and the tool prints them more cheaply than the files:
 
-- Overview without opening files: `python3 docs/kb/shared/kb.py list --open [--platform windows] [--area checkpoint]`
-- New report: `python3 docs/kb/shared/kb.py new issue "symptom in a few words"`
-- A fix commit names its issue (`KB: NOS-NNN`) and, if any, its pattern (`Pattern: PAT-NNN`).
-- Before a pull request: `python3 docs/kb/shared/kb.py index && python3 docs/kb/shared/kb.py lint --strict`
+- What is ready to fix, one line each with its next step: `python3 docs/kb/shared/kb.py list --open --action fix`
+  (also `--area checkpoint`, `--platform windows`, `--action decide|verify|review`). Then read that issue's file and
+  the pattern it links (its "How to fix").
+- Across the bitboinc repositories checked out next to this one: `kb.py todo ../<repo> ...` groups their open issues
+  by shared pattern, so a fix is read once and made everywhere; `kb.py check PAT-NNN ../<repo> ...` checks a pattern.
+- Before debugging a symptom: `grep -ril "<words>" docs/kb ../*/docs/kb/issues`.
+- New report: `kb.py new issue "symptom in a few words" area=... next=...`.
+- After a fix: `kb.py set NOS-NNN status=fix-proposed` (or `status=fixed fixed_in=<commit>` once merged) with
+  `--log "..."`; the ledger and INDEX.md follow. The commit names the issue (`KB: NOS-NNN`) and, if any, the
+  pattern (`Pattern: PAT-NNN`).
+- Before a pull request: `python3 docs/kb/shared/kb.py index && python3 docs/kb/shared/kb.py lint --strict`.
+  Workflow: [docs/kb/shared/PROCESS.md](docs/kb/shared/PROCESS.md).
